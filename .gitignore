@@ -1,0 +1,12 @@
+.build/
+/data/
+.env
+*.key
+*.pfx
+*.p12
+*.pem
+*.cer
+*.nupkg
+*.snupkg
+__pycache__/
+*.pyc

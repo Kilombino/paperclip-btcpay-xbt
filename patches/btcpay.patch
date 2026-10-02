@@ -1,0 +1,114 @@
+diff --git a/BTCPayServer.Common/BTCPayNetworkProvider.cs b/BTCPayServer.Common/BTCPayNetworkProvider.cs
+index 7134774..88b2e1e 100644
+--- a/BTCPayServer.Common/BTCPayNetworkProvider.cs
++++ b/BTCPayServer.Common/BTCPayNetworkProvider.cs
+@@ -57,8 +57,8 @@ namespace BTCPayServer
+             ArgumentNullException.ThrowIfNull(cryptoCode);
+             if (!_Networks.TryGetValue(cryptoCode.ToUpperInvariant(), out var network))
+             {
+-                if (cryptoCode == "XBT")
+-                    return GetNetwork<T>("BTC");
++                // XBT is a separate chain in this build, never a BTC alias.
++                return null;
+             }
+             return network as T;
+         }
+diff --git a/BTCPayServer.Common/BTCPayServer.Common.csproj b/BTCPayServer.Common/BTCPayServer.Common.csproj
+index d51e26f..5ededf9 100644
+--- a/BTCPayServer.Common/BTCPayServer.Common.csproj
++++ b/BTCPayServer.Common/BTCPayServer.Common.csproj
+@@ -2,7 +2,7 @@
+   <Import Project="../Build/Version.csproj" Condition="Exists('../Build/Version.csproj')" />
+   <Import Project="../Build/Common.csproj" />
+   <ItemGroup>
+-    <PackageReference Include="NBXplorer.Client" Version="5.0.8" />
++    <PackageReference Include="NBXplorer.Client" Version="5.0.9-xbt.1" />
+     <PackageReference Include="NicolasDorier.StandardConfiguration" Version="2.0.1" />
+   </ItemGroup>
+ </Project>
+diff --git a/BTCPayServer/Configuration/DefaultConfiguration.cs b/BTCPayServer/Configuration/DefaultConfiguration.cs
+index 370db7d..480dd8e 100644
+--- a/BTCPayServer/Configuration/DefaultConfiguration.cs
++++ b/BTCPayServer/Configuration/DefaultConfiguration.cs
+@@ -166,6 +166,9 @@ namespace BTCPayServer.Configuration
+             var p2 = new Plugins.Altcoins.AltcoinsPlugin();
+             p2.Execute(services);
+ 
++            services.BootstrapServices.GetRequiredService<SelectedChains>().Add("XBT");
++            new Plugins.Xbt.XbtPlugin().Execute(services);
++
+             services.AddSingleton(services.BootstrapServices.GetRequiredService<SelectedChains>());
+             services.AddSingleton(services.BootstrapServices.GetRequiredService<NBXplorerNetworkProvider>());
+             services.AddSingleton(services.BootstrapServices.GetRequiredService<Logs>());
+diff --git a/BTCPayServer/Plugins/Wallets/Controllers/GreenfieldStoreOnChainPaymentMethodsController.WalletGeneration.cs b/BTCPayServer/Plugins/Wallets/Controllers/GreenfieldStoreOnChainPaymentMethodsController.WalletGeneration.cs
+index 223fae0..c16103c 100644
+--- a/BTCPayServer/Plugins/Wallets/Controllers/GreenfieldStoreOnChainPaymentMethodsController.WalletGeneration.cs
++++ b/BTCPayServer/Plugins/Wallets/Controllers/GreenfieldStoreOnChainPaymentMethodsController.WalletGeneration.cs
+@@ -27,6 +27,8 @@ namespace BTCPayServer.Controllers.Greenfield
+         {
+             request ??= new GenerateOnChainWalletRequest();
+             AssertCryptoCodeWallet(paymentMethodId, out var network, out _);
++            if (network.ReadonlyWallet && request.SavePrivateKeys)
++                return this.CreateAPIError(400, "watch-only", "This network supports watch-only receiving wallets. Private keys must stay in compatible wallet software.");
+ 
+             if (!walletProvider.IsAvailable(network))
+             {
+diff --git a/BTCPayServer/Plugins/Wallets/Controllers/UIStoreOnChainWalletsController.cs b/BTCPayServer/Plugins/Wallets/Controllers/UIStoreOnChainWalletsController.cs
+index a134184..ff3d217 100644
+--- a/BTCPayServer/Plugins/Wallets/Controllers/UIStoreOnChainWalletsController.cs
++++ b/BTCPayServer/Plugins/Wallets/Controllers/UIStoreOnChainWalletsController.cs
+@@ -779,7 +779,10 @@ public class UIStoreOnChainWalletsController(
+ 
+     private async Task<WalletCreationPermissions> CanUseHotWallet()
+     {
+-        return await authorizationService.CanUseHotWallet(policiesSettings, User);
++        var permissions = await authorizationService.CanUseHotWallet(policiesSettings, User);
++        if (HttpContext.Request.RouteValues["cryptoCode"]?.ToString() == "XBT")
++            return permissions with { CanCreateHotWallet = false };
++        return permissions;
+     }
+ 
+     private async Task<string> ReadAllText(IFormFile file)
+diff --git a/BTCPayServer/TagHelpers/CurrenciesSuggestionsTagHelper.cs b/BTCPayServer/TagHelpers/CurrenciesSuggestionsTagHelper.cs
+index 9f7375d..69fba9e 100644
+--- a/BTCPayServer/TagHelpers/CurrenciesSuggestionsTagHelper.cs
++++ b/BTCPayServer/TagHelpers/CurrenciesSuggestionsTagHelper.cs
+@@ -25,6 +25,14 @@ namespace BTCPayServer.TagHelpers
+             // insert btc at the front
+             output.PostElement.AppendHtml("<option value=\"BTC\">BTC - Bitcoin</option>");
+             output.PostElement.AppendHtml("<option value=\"SATS\">SATS - Satoshi</option>");
++            // Plugin currencies are excluded from the fiat list above. Include the
++            // XBT pricing units only when the plugin has registered them.
++            foreach (var code in new[] { "XBT", "BTCB2", "XBTSATS", "USDC" })
++            {
++                var currency = _currencies.GetCurrencyData(code, false);
++                if (currency is null) continue;
++                output.PostElement.AppendHtml($"<option value=\"{currency.Code}\">{currency.Code} - {currency.Name}</option>");
++            }
+             // move most often used currencies up
+             int pos = 0;
+             InsertAt(currencies, "USD", pos++);
+diff --git a/Dockerfile b/Dockerfile
+index 6dc8726..2bc3bc8 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -2,6 +2,7 @@ FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.400-noble AS bu
+ ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+ WORKDIR /source
+ COPY nuget.config nuget.config
++COPY Paperclip/nuget Paperclip/nuget
+ COPY Build/Common.csproj Build/Common.csproj
+ COPY BTCPayServer.Abstractions/BTCPayServer.Abstractions.csproj BTCPayServer.Abstractions/BTCPayServer.Abstractions.csproj
+ COPY BTCPayServer/BTCPayServer.csproj BTCPayServer/BTCPayServer.csproj
+diff --git a/nuget.config b/nuget.config
+index 071facf..060a195 100644
+--- a/nuget.config
++++ b/nuget.config
+@@ -2,6 +2,7 @@
+ <configuration>
+   <packageSources>
+     <clear />
++    <add key="paperclip-xbt" value="Paperclip/nuget" />
+     <add key="api.nuget.org" value="https://api.nuget.org/v3/index.json" />
+   </packageSources>
+ </configuration>

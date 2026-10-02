@@ -1,0 +1,15 @@
+name: Build and test XBT integration
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned upstream sources and run focused tests
+        run: sh scripts/build.sh

@@ -1,0 +1,77 @@
+services:
+  web:
+    image: paperclip-btcpay:xbt-beta
+    user: "1000:1000"
+    entrypoint: ["dotnet", "BTCPayServer.dll"]
+    restart: unless-stopped
+    depends_on: [postgres, nbxplorer, gateway]
+    ports: ["127.0.0.1:23000:3003"]
+    environment:
+      HOME: /data
+      BTCPAY_DATADIR: /data
+      BTCPAY_PLUGINDIR: /data/plugins
+      BTCPAY_DOCKERDEPLOYMENT: "false"
+      BTCPAY_NETWORK: mainnet
+      BTCPAY_CHAINS: XBT
+      BTCPAY_BIND: 0.0.0.0:3003
+      BTCPAY_XBTLIGHTNING: type=clightning;server=unix:/gateway/lightning-rpc
+      BTCPAY_XBTEXPLORERURL: http://nbxplorer:24444
+      BTCPAY_XBTEXPLORERCOOKIEFILE: /nbxplorer/Main/.cookie
+      BTCPAY_POSTGRES: "User ID=postgres;Host=postgres;Database=btcpay;Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}"
+    volumes:
+      - ./data/btcpay:/data
+      - ./data/nbxplorer:/nbxplorer:ro
+      - gateway-rpc:/gateway:ro
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  nbxplorer:
+    image: paperclip-nbxplorer:xbt-beta
+    user: "1000:1000"
+    restart: unless-stopped
+    depends_on: [postgres]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    environment:
+      HOME: /data
+      NBXPLORER_DATADIR: /data
+      NBXPLORER_NETWORK: mainnet
+      NBXPLORER_CHAINS: XBT
+      NBXPLORER_BIND: 0.0.0.0:24444
+      NBXPLORER_XBTRPCURL: "${XBT_RPC_URL:?Set XBT_RPC_URL}"
+      NBXPLORER_XBTRPCUSER: "${XBT_RPC_USER:?Set XBT_RPC_USER}"
+      NBXPLORER_XBTRPCPASSWORD: "${XBT_RPC_PASSWORD:?Set XBT_RPC_PASSWORD}"
+      NBXPLORER_XBTNODEENDPOINT: "${XBT_P2P_ENDPOINT:?Set XBT_P2P_ENDPOINT}"
+      NBXPLORER_EXPOSERPC: "false"
+      NBXPLORER_POSTGRES: "User ID=postgres;Host=postgres;Database=nbxplorer;Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}"
+    volumes: ["./data/nbxplorer:/data"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  gateway:
+    image: paperclip-cln-gateway:xbt-beta
+    user: "1000:1000"
+    group_add: ["${CLN_RPC_GID:-1000}"]
+    restart: unless-stopped
+    environment:
+      EXPECTED_NODE: "${CLN_NODE_ID:?Set CLN_NODE_ID}"
+      CLN_ADVERTISE_HOST: "${CLN_ADVERTISE_HOST:-}"
+      CLN_ADVERTISE_PORT: "${CLN_ADVERTISE_PORT:-9735}"
+    volumes:
+      - type: bind
+        source: "${CLN_SOCKET:?Set CLN_SOCKET}"
+        target: /cln/lightning-rpc
+        read_only: true
+        bind:
+          create_host_path: false
+      - gateway-rpc:/gateway
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: btcpay
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./deploy/10-nbxplorer.sql:/docker-entrypoint-initdb.d/10-nbxplorer.sql:ro
+volumes:
+  gateway-rpc:

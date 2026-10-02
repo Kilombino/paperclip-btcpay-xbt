@@ -1,0 +1,31 @@
+@model BTCPayServer.Plugins.Xbt.XbtSettings
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "XBT payments";
+    var storeId = Context.Request.RouteValues["storeId"];
+}
+<div class="sticky-header"><h2>@ViewData["Title"]</h2></div>
+<partial name="_StatusMessage" />
+<p>Choose how customers can pay new invoices. You can enable either method, both, or neither. Existing invoices continue to be monitored.</p>
+<form method="post" asp-controller="UIXbt" asp-action="Settings" asp-route-storeId="@storeId">
+    <div class="card mb-4"><div class="card-body">
+        <div class="form-check form-switch mb-2">
+            <input asp-for="OnChainEnabled" class="form-check-input" />
+            <label asp-for="OnChainEnabled" class="form-check-label">On-chain XBT</label>
+        </div>
+        <p class="text-secondary">Receive payments directly into a watch-only XBT wallet. Confirmations are tracked by the local XBT node.</p>
+        <p>Recommended: connect a dedicated XBT merchant wallet using its account public key. Each invoice gets a fresh address; your spending keys stay in your wallet.</p>
+        <a href="@Url.Content($"~/stores/{storeId}/onchain/XBT/import/xpub")">Connect an existing wallet</a>
+        <span class="mx-2">·</span>
+        <a href="@Url.Content($"~/stores/{storeId}/onchain/XBT")">Other wallet setup options</a>
+    </div></div>
+    <div class="card mb-4"><div class="card-body">
+        <div class="form-check form-switch mb-2">
+            <input asp-for="LightningEnabled" class="form-check-input" />
+            <label asp-for="LightningEnabled" class="form-check-label">XBT Lightning</label>
+        </div>
+        <p class="text-secondary mb-0">Receive through your connected XBT Core Lightning node. Inbound channel liquidity is required.</p>
+    </div></div>
+    <p class="text-secondary">Each enabled method also needs a configured wallet or node. On-chain spending and Bitcoin hardware-wallet signing are not supported by this test integration. Keep the receiving wallet's backup in compatible XBT wallet software.</p>
+    <button type="submit" class="btn btn-primary">Save payment settings</button>
+</form>
