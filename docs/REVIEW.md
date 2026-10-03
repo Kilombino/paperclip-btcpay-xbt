@@ -44,6 +44,25 @@ audit or a review of every upstream dependency.
   checks passed; Lightning and indexer monitoring reconnected; the previously
   paid checkout still reports Settled over trusted HTTPS. No payment was sent.
 
+## LND backend verification — 2026-10-03
+
+Run against a live XBT mainnet LND node (`0.21.3-beta-blake2b.14`) and Knots
+`29.4.2` node, with the images built by `scripts/build.sh` (all focused tests
+passed) and `COMPOSE_PROFILES=` (no CLN gateway):
+
+- `scripts/lnd-connection.sh` accepted the node (bit 512 required, 515 present,
+  synced) and baked a macaroon with `info:read`, `invoices:read` and
+  `invoices:write` under its own root key id. With it, REST calls to send a
+  payment (`/v2/router/send`), open a channel, send on-chain and read balances or
+  channels returned `permission denied`; `getinfo` and invoices worked.
+- BTCPay created XBT Lightning invoices through the node: the BOLT11 decoded to
+  the node's key, carried feature 512, and appeared in the node as open invoices.
+  No Lightning payment was received yet (the test channel had no inbound liquidity).
+- On-chain: receiving addresses derived by BTCPay from a BIP84 account key matched
+  `deriveaddresses` on the Knots node. A paid on-chain merchant checkout: a
+  10,000-sat invoice paid from the node's wallet was detected in the mempool as
+  Processing within seconds and became Settled after one confirmation (block 975272).
+
 ## Remaining limits
 
 - No fresh paid on-chain merchant checkout or induced reorganization test yet.
