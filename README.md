@@ -32,9 +32,11 @@ patches. Do not install the plugin DLL alone into an existing production server.
 - Your own synced XBT Knots backend, reachable over authenticated RPC and P2P.
   Mainnet's XBT fork checkpoint is checked before indexing. An unpruned node
   with txindex was used for testing. Pruned historical recovery is not validated.
-- Your own XBT CLN node with required BLAKE2b bit 512 and unified signature
-  capability 514/515. Tested with `v26.06.8-blake2b.5`. Receiving Lightning
-  requires a funded channel with inbound liquidity.
+- For Lightning, your own XBT node with required BLAKE2b bit 512 and unified
+  signature capability 514/515: **Core Lightning** (tested with
+  `v26.06.8-blake2b.5`) or **LND** (tested with `0.21.3-beta-blake2b.14` from
+  [paulscode/lightning-fork](https://github.com/paulscode/lightning-fork)).
+  Receiving Lightning requires a funded channel with inbound liquidity.
 - A dedicated XBT merchant wallet account public key, or a backed-up watch-only
   wallet created through BTCPay. **Do not import a SHA-256 BTC wallet.**
 
@@ -92,6 +94,31 @@ For LAN/remote access, use an authenticated, trusted HTTPS reverse proxy to
 BTCPay, forwarding the original host and `X-Forwarded-Proto`. Camera scanning
 requires a secure browser context and camera permission. Self-signed certificates
 must be explicitly trusted on each device. Do not bypass browser TLS validation.
+
+## Lightning with LND instead of CLN
+
+BTCPay talks to LND natively, so LND needs no gateway: LND's own macaroons give
+the same invoice-only boundary. `scripts/lnd-connection.sh` checks that the node
+is a synced XBT LND node (bit 512 required, 514/515 present; it refuses a stock
+SHA-256 node, as the CLN gateway does), bakes a macaroon limited to `info:read`,
+`invoices:read` and `invoices:write` under its own root key id, and prints the
+connection string with the node's pinned TLS certificate thumbprint:
+
+```sh
+LNCLI="docker exec lnd lncli --network mainnet" \
+LND_REST=https://host.docker.internal:8080 \
+LND_TLS_CERT=/path/to/lnd/tls.cert \
+sh scripts/lnd-connection.sh
+```
+
+In `.env`, set `COMPOSE_PROFILES=` (empty, so the CLN gateway is not started) and
+`XBT_LIGHTNING=` to the printed line. BTCPay reaches the node's REST port from its
+container through `host.docker.internal`; the node's TLS certificate must include
+the name or address used in `LND_REST` (`tlsextraip` / `tlsextradomain` in
+`lnd.conf`). The macaroon cannot pay, manage channels, move on-chain funds or read
+the seed. Unlike the CLN gateway it does not hide the node's other invoices from
+BTCPay; use a node dedicated to the store if that matters. Revoke it alone with
+`lncli deletemacaroonid <root key id>`.
 
 ## Safety and limitations
 
