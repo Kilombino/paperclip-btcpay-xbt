@@ -2,6 +2,7 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
+python3 scripts/test_lnd_connection.py
 python3 scripts/prepare.py
 python3 -m unittest discover -s gateway -p test_gateway.py
 sdk=mcr.microsoft.com/dotnet/sdk:10.0.400-noble
