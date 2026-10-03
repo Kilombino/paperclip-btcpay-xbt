@@ -20,7 +20,16 @@ set -eu
 LNCLI=${LNCLI:-lncli}
 LND_REST=${LND_REST:?Set LND_REST, e.g. https://host.docker.internal:8080}
 LND_TLS_CERT=${LND_TLS_CERT:?Set LND_TLS_CERT to the node tls.cert}
-ROOT_KEY_ID=${ROOT_KEY_ID:-48}
+# Validate the certificate before any RPC or credential creation. Avoid a pipeline
+# whose final command can hide an openssl failure under POSIX sh.
+fingerprint=$(openssl x509 -in "$LND_TLS_CERT" -noout -fingerprint -sha256)
+thumbprint=$(printf '%s' "$fingerprint" | python3 -c '
+import re, sys
+value = sys.stdin.read().strip().split("=", 1)[-1].replace(":", "").lower()
+if not re.fullmatch(r"[0-9a-f]{64}", value):
+    sys.exit("Invalid TLS certificate fingerprint")
+print(value)
+')
 
 info=$($LNCLI getinfo)
 # A BLAKE2b node requires option_blake2b (bit 512) and signs with unified sighash
@@ -39,8 +48,26 @@ if not ok:
 print("Node", info["identity_pubkey"], info.get("alias", ""), "is a synced XBT LND node.", file=sys.stderr)
 '
 
+# Random nonzero uint64 IDs avoid reuse across normal runs. Check existing IDs
+# too, and reject explicit reuse rather than silently sharing revocation scope.
+ids=$($LNCLI listmacaroonids)
+ROOT_KEY_ID=$(printf '%s' "$ids" | python3 -c '
+import json, secrets, sys
+used = {int(v) for v in json.load(sys.stdin)["root_key_ids"]}
+requested = sys.argv[1]
+if requested:
+    if not requested.isascii() or not requested.isdecimal():
+        sys.exit("ROOT_KEY_ID must be a nonzero uint64")
+    value = int(requested)
+    if not 0 < value < 2**64 or value in used:
+        sys.exit("ROOT_KEY_ID must be nonzero, unused and within uint64 range")
+else:
+    value = 0
+    while value == 0 or value in used:
+        value = secrets.randbits(64)
+print(value)
+' "${ROOT_KEY_ID:-}")
 macaroon=$($LNCLI bakemacaroon --root_key_id "$ROOT_KEY_ID" info:read invoices:read invoices:write)
-thumbprint=$(openssl x509 -in "$LND_TLS_CERT" -outform DER | openssl dgst -sha256 -r | cut -d' ' -f1)
 
 echo "Invoice-only macaroon baked with root key id $ROOT_KEY_ID (revoke: lncli deletemacaroonid $ROOT_KEY_ID)." >&2
 echo "Put this in .env (keep it private):" >&2

@@ -117,7 +117,11 @@ container through `host.docker.internal`; the node's TLS certificate must includ
 the name or address used in `LND_REST` (`tlsextraip` / `tlsextradomain` in
 `lnd.conf`). The macaroon cannot pay, manage channels, move on-chain funds or read
 the seed. Unlike the CLN gateway it does not hide the node's other invoices from
-BTCPay; use a node dedicated to the store if that matters. Revoke it alone with
+BTCPay; use a node dedicated to the store if that matters. Each run selects a random nonzero root key ID and checks that it is unused.
+An explicit `ROOT_KEY_ID` must also be unused; existing IDs are rejected. Do not
+reuse the printed ID for other credentials. LND has no atomic reserve-ID operation,
+so coordinate explicit IDs between administrators. Invalid certificates stop setup
+before any credential is baked. Revoke this credential with
 `lncli deletemacaroonid <root key id>`.
 
 ## Safety and limitations
