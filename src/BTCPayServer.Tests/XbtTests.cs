@@ -127,4 +127,17 @@ public class XbtTests
     {
         Assert.Equal(expected, XbtPlugin.ResolveIcon(configured));
     }
+
+    [Theory]
+    [InlineData(null, XbtPlugin.DefaultSatsLabel)]
+    [InlineData("  ", XbtPlugin.DefaultSatsLabel)]
+    [InlineData("XBTC sats", "XBTC sats")]
+    [InlineData(" sats XBT ", "sats XBT")]
+    [InlineData("<b>sats</b>", XbtPlugin.DefaultSatsLabel)]
+    [InlineData(" leading", "leading")]
+    [InlineData("a label that is far too long", XbtPlugin.DefaultSatsLabel)]
+    public void SatsLabelIsConfigurableAndFallsBackSafely(string? configured, string expected)
+    {
+        Assert.Equal(expected, XbtPlugin.ResolveSatsLabel(configured));
+    }
 }
