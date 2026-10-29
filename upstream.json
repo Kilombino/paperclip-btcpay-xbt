@@ -1,13 +1,13 @@
 {
   "btcpay": {
     "repository": "https://github.com/btcpayserver/btcpayserver.git",
-    "revision": "2d5a0d8077bb33af080e949031da33d84b80638d",
-    "version": "2.4.4"
+    "revision": "2868deedd9d911b715fec7306ea9cada36d86bff",
+    "version": "2.4.7"
   },
   "nbxplorer": {
-    "repository": "https://github.com/dgarage/NBXplorer.git",
-    "revision": "702ec61324cad76c81b14a9e181a5a6f60798146",
-    "version": "2.6.13"
+    "repository": "https://github.com/btcpayserver/NBXplorer.git",
+    "revision": "be1e22ce639c1c6531a5f817c8413056841eb968",
+    "version": "2.6.21"
   },
-  "clientPackage": "5.0.9-xbt.1"
+  "clientPackage": "5.0.12-xbt.1"
 }

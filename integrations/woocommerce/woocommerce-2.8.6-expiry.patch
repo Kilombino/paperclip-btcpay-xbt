@@ -1,0 +1,45 @@
+--- a/src/Gateway/AbstractGateway.php
++++ b/src/Gateway/AbstractGateway.php
+@@ -612,7 +612,7 @@
+ 		// out-of-order deliveries un-completing them.
+ 		// Note: transitions from cancelled/failed need to stay possible (late payments after
+ 		// expiration, see InvoicePaymentSettled below), so those are not guarded here.
+-		if (in_array($webhookData->type, ['InvoiceReceivedPayment', 'InvoiceProcessing', 'InvoiceExpired', 'InvoiceInvalid'], true)
++		if (in_array($webhookData->type, ['InvoiceReceivedPayment', 'InvoiceProcessing', 'InvoiceExpired', 'InvoiceInvalid', 'InvoicePaymentSettled'], true)
+ 			&& $order->has_status(['completed', 'refunded'])
+ 		) {
+ 			$note = sprintf(
+@@ -639,15 +639,27 @@
+ 
+ 				break;
+ 			case 'InvoicePaymentSettled':
+-				// We can't use $webhookData->afterExpiration here as there is a bug affecting all version prior to
+-				// BTCPay Server v1.7.0.0, see https://github.com/btcpayserver/btcpayserver/issues/
+-				// Therefore we check if the invoice is in expired or expired paid partial status, instead.
++				// Modern webhooks report expiry explicitly. Shared WooCommerce status
++				// mappings (e.g. on-hold) are not evidence of an expired invoice.
+ 				$orderStatus = $order->get_status();
+-				if ($orderStatus === str_replace('wc-', '', $configuredOrderStates[OrderStates::EXPIRED]) ||
++				$processingStatus = str_replace('wc-', '', $configuredOrderStates[OrderStates::PROCESSING]);
++				$legacyExpired = $orderStatus !== $processingStatus && (
++					$orderStatus === str_replace('wc-', '', $configuredOrderStates[OrderStates::EXPIRED]) ||
+ 					$orderStatus === str_replace('wc-', '', $configuredOrderStates[OrderStates::EXPIRED_PAID_PARTIAL])
+-				) {
++				);
++				$afterExpiration = isset($webhookData->afterExpiration) && is_bool($webhookData->afterExpiration)
++					? $webhookData->afterExpiration : $legacyExpired;
++				if ($afterExpiration) {
+ 					// Check if also the invoice is now fully paid.
+-					if (GreenfieldApiHelper::invoiceIsFullyPaid($webhookData->invoiceId)) {
++					try {
++						$client = new Invoice($this->apiHelper->url, $this->apiHelper->apiKey);
++						$invoice = $client->getInvoice($this->apiHelper->storeId, $webhookData->invoiceId);
++						$fullyPaid = $invoice->isSettled();
++					} catch (\Throwable $e) {
++						// Leave the order and delivery history untouched so BTCPay can retry.
++						wp_die('Could not verify the late payment.', '', ['response' => 503]);
++					}
++					if ($fullyPaid) {
+ 						Logger::debug('Invoice fully paid.');
+ 						$this->updateWCOrderStatus($order, $configuredOrderStates[OrderStates::EXPIRED_PAID_LATE]);
+ 						$order->add_order_note(__('Invoice fully settled after invoice was already expired. Needs manual checking.', 'btcpay-greenfield-for-woocommerce'));

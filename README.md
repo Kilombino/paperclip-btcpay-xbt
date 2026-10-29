@@ -45,7 +45,7 @@ patches. Do not install the plugin DLL alone into an existing production server.
 - A dedicated XBT merchant wallet account public key, or a backed-up watch-only
   wallet created through BTCPay. **Do not import a SHA-256 BTC wallet.**
 
-Pinned sources: BTCPay Server **2.4.4**, NBXplorer **2.6.13**. Exact revisions
+Pinned sources: BTCPay Server **2.4.7**, NBXplorer **2.6.21**. Exact revisions
 are in [upstream.json](upstream.json). Mainnet is the supported deployment target.
 
 ## Lightning backend compatibility
