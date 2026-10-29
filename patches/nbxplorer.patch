@@ -342,3 +342,19 @@ index 0000000..c071782
 +    "block_hash": "c31b24420d67f86e524f980a24a18e88f36c821046d5288251b5d88998c69f86"
 +  }
 +]
+diff --git a/NBXplorer/Backend/Indexer.cs b/NBXplorer/Backend/Indexer.cs
+index a6d919d..03bf3df 100644
+--- a/NBXplorer/Backend/Indexer.cs
++++ b/NBXplorer/Backend/Indexer.cs
+@@ -288,6 +288,11 @@ namespace NBXplorer.Backend
+ 					ConnectCancellation = handshakeTimeout.Token,
+ 					IsRelay = true
+ 				};
++				// Bitcoin Knots 29.4.3 only serves headers and blocks past the BLAKE2b
++				// fork to peers that advertise NODE_BLAKE2B (bit 28); without it the
++				// indexer stalls at the height the node was upgraded.
++				if (network.CryptoCode == "XBT")
++					nodeParams.Services |= (NodeServices)(1UL << 28);
+ 				if (ExplorerConfiguration.SocksEndpoint != null)
+ 				{
+ 					var socks = new SocksSettingsBehavior()
