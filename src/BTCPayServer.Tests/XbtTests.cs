@@ -235,7 +235,7 @@ public class XbtTests
         protected override async System.Threading.Tasks.Task<System.Net.Http.HttpResponseMessage> SendAsync(
             System.Net.Http.HttpRequestMessage request, System.Threading.CancellationToken cancellationToken)
         {
-            var body = JObject.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
+            var body = request.Content is null ? new JObject() : JObject.Parse(await request.Content.ReadAsStringAsync(cancellationToken));
             request.Headers.TryGetValues("Grpc-Metadata-macaroon", out var macaroon);
             var path = request.RequestUri!.AbsolutePath;
             Requests.Add((path, macaroon is null ? null : string.Join(",", macaroon), body));
@@ -298,5 +298,36 @@ public class XbtTests
         var request = Assert.Single(fake.Requests);
         Assert.Equal("/v2/offers/invoices", request.Path);
         Assert.Equal(Convert.ToBase64String(mine), request.Body.Value<string>("offer_id"));
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task OffersClientReadsProofAndPayerNote()
+    {
+        var preimage = new byte[32]; preimage[0] = 9;
+        var fake = new FakeLnd
+        {
+            Reply = path => path.StartsWith("/v1/invoice/")
+                ? new JObject { ["r_preimage"] = Convert.ToBase64String(preimage) }.ToString()
+                : new JObject { ["type"] = "invoice", ["invoice_request"] = new JObject { ["payer_note"] = "Thanks!" } }.ToString()
+        };
+        var client = OffersClient(fake);
+        Assert.Equal(NBitcoin.DataEncoders.Encoders.Hex.EncodeData(preimage), await client.GetPreimage("ab01", default));
+        Assert.Equal("Thanks!", await client.GetPayerNote("lni1xyz", default));
+        Assert.Equal("/v1/invoice/ab01", fake.Requests[0].Path);
+        Assert.Equal("/v2/offers/decode", fake.Requests[1].Path);
+        Assert.Equal("lni1xyz", fake.Requests[1].Body.Value<string>("bolt12"));
+    }
+
+    [Fact]
+    public void Bolt12PaymentsShowAsLightningPayments()
+    {
+        // The invoice page lists a payment whose handler is a Lightning one, reading its
+        // destination and proof from LightningPaymentData.
+        var details = JObject.FromObject(new Bolt12PaymentDetails { PaymentHash = "aa", Preimage = "bb", Invoice = "lni1xyz", PayerNote = "hi" });
+        var read = details.ToObject<Client.Models.LightningPaymentData>()!;
+        Assert.Equal("aa", read.PaymentHash);
+        Assert.Equal("bb", read.Preimage);
+        Assert.Equal("lni1xyz", read.BOLT11);
+        Assert.True(typeof(Payments.Lightning.ILightningPaymentHandler).IsAssignableFrom(typeof(Bolt12PaymentHandler)));
     }
 }

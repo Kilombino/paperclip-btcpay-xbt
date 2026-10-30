@@ -53,12 +53,28 @@ public class Bolt12PromptDetails
     public string OfferId { get; set; } = "";
 }
 
-public class Bolt12PaymentHandler : IPaymentMethodHandler
+/// <summary>
+/// What is kept of a BOLT 12 payment. The field names match <see cref="LightningPaymentData"/>, so
+/// the invoice page lists it with the other Lightning payments: the paid invoice (lni1…) as its
+/// destination and the preimage as its proof.
+/// </summary>
+public class Bolt12PaymentDetails
+{
+    public string PaymentHash { get; set; } = "";
+    public string? Preimage { get; set; }
+    [JsonProperty("BOLT11")]
+    public string? Invoice { get; set; }
+    /// <summary>The payer's note from the invoice request (invreq_payer_note), if any.</summary>
+    public string? PayerNote { get; set; }
+}
+
+public class Bolt12PaymentHandler : IPaymentMethodHandler, ILightningPaymentHandler
 {
     private readonly BTCPayNetwork _network;
     private readonly IServiceProvider _serviceProvider;
     public JsonSerializer Serializer { get; }
     public PaymentMethodId PaymentMethodId { get; }
+    public BTCPayNetwork Network => _network;
 
     public Bolt12PaymentHandler(PaymentMethodId paymentMethodId, BTCPayNetwork network, IServiceProvider serviceProvider)
     {
@@ -157,14 +173,14 @@ public class Bolt12PaymentHandler : IPaymentMethodHandler
         => details.ToObject<Bolt12PromptDetails>(Serializer) ?? throw new FormatException($"Invalid {nameof(Bolt12PromptDetails)}");
     object IPaymentMethodHandler.ParsePaymentPromptDetails(JToken details) => ParsePaymentPromptDetails(details);
 
-    public LightningLikePaymentData ParsePaymentDetails(JToken details)
-        => details.ToObject<LightningLikePaymentData>(Serializer) ?? throw new FormatException($"Invalid {nameof(LightningLikePaymentData)}");
+    public LightningPaymentData ParsePaymentDetails(JToken details)
+        => details.ToObject<LightningPaymentData>(Serializer) ?? throw new FormatException($"Invalid {nameof(LightningPaymentData)}");
     object IPaymentMethodHandler.ParsePaymentDetails(JToken details) => ParsePaymentDetails(details);
 }
 
 public record Bolt12OfferRequest(string Description, ulong AmountMsat, ulong AbsoluteExpiry, string? Issuer, string Label);
 public record Bolt12Offer(string OfferId, string Bolt12, bool Created);
-public record Bolt12OfferInvoice(string PaymentHash, string State, ulong AmountPaidMsat, DateTimeOffset CreatedAt);
+public record Bolt12OfferInvoice(string PaymentHash, string State, ulong AmountPaidMsat, DateTimeOffset CreatedAt, string? Bolt12 = null);
 
 /// <summary>
 /// The offers REST API of paulscode/lightning-fork (/v2/offers), reached through the
@@ -233,19 +249,38 @@ public class LndOffersClient
                 ToHex(i.Value<string>("payment_hash")),
                 i.Value<string>("state") ?? "",
                 ParseULong(i.Value<string>("amount_paid_msat")),
-                DateTimeOffset.FromUnixTimeSeconds((long)ParseULong(i.Value<string>("created_at")))))
+                DateTimeOffset.FromUnixTimeSeconds((long)ParseULong(i.Value<string>("created_at"))),
+                i.Value<string>("bolt12")))
             .ToArray();
     }
 
     public Task DisableOffer(string offerIdHex, CancellationToken cancellationToken)
         => Post("/v2/offers/disable", new JObject { ["offer_id"] = ToBase64(offerIdHex) }, cancellationToken);
 
-    async Task<JObject> Post(string path, JObject body, CancellationToken cancellationToken)
+    /// <summary>The preimage of a settled invoice (lnrpc LookupInvoice), in hex, if the node gives it.</summary>
+    public async Task<string?> GetPreimage(string paymentHashHex, CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, _baseUrl + path)
-        {
-            Content = new StringContent(body.ToString(Formatting.None), Encoding.UTF8, "application/json")
-        };
+        var response = await Send(HttpMethod.Get, $"/v1/invoice/{paymentHashHex}", null, cancellationToken);
+        var preimage = response.Value<string>("r_preimage");
+        return string.IsNullOrEmpty(preimage) ? null : ToHex(preimage);
+    }
+
+    /// <summary>The payer's note of an offer's invoice (lni1…), if the request had one.</summary>
+    public async Task<string?> GetPayerNote(string bolt12Invoice, CancellationToken cancellationToken)
+    {
+        var response = await Post("/v2/offers/decode", new JObject { ["bolt12"] = bolt12Invoice }, cancellationToken);
+        var note = (response["invoice_request"] as JObject)?.Value<string>("payer_note");
+        return string.IsNullOrWhiteSpace(note) ? null : note;
+    }
+
+    Task<JObject> Post(string path, JObject body, CancellationToken cancellationToken)
+        => Send(HttpMethod.Post, path, body, cancellationToken);
+
+    async Task<JObject> Send(HttpMethod method, string path, JObject? body, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(method, _baseUrl + path);
+        if (body is not null)
+            request.Content = new StringContent(body.ToString(Formatting.None), Encoding.UTF8, "application/json");
         _authentication.AddAuthentication(request);
         using var response = await _http.SendAsync(request, cancellationToken);
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -435,7 +470,7 @@ public class Bolt12Listener : BackgroundService
             foreach (var paid in await offers.ListOfferInvoices(offerId, cancellationToken))
             {
                 if (paid is { State: "SETTLED", AmountPaidMsat: > 0 })
-                    await RecordPayment(handler, invoiceId, paid);
+                    await RecordPayment(handler, offers, invoiceId, paid, cancellationToken);
             }
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -455,12 +490,38 @@ public class Bolt12Listener : BackgroundService
         return client;
     }
 
-    async Task RecordPayment(Bolt12PaymentHandler handler, string invoiceId, Bolt12OfferInvoice paid)
+    async Task RecordPayment(Bolt12PaymentHandler handler, LndOffersClient offers, string invoiceId, Bolt12OfferInvoice paid,
+        CancellationToken cancellationToken)
     {
         var invoiceEntity = await _invoiceRepository.GetInvoice(invoiceId);
         if (invoiceEntity is null)
             return;
-        var paymentHash = uint256.Parse(paid.PaymentHash);
+        // Already recorded: nothing more to ask the node.
+        if (invoiceEntity.GetPayments(false).Any(p => p.PaymentMethodId == _paymentMethodId && p.Id == paid.PaymentHash))
+            return;
+        // The proof of payment and the payer's note are a nicety: a node that can't give them
+        // must not keep the payment from being recorded.
+        string? preimage = null, payerNote = null;
+        try
+        {
+            preimage = await offers.GetPreimage(paid.PaymentHash, cancellationToken);
+            if (!string.IsNullOrEmpty(preimage) &&
+                Encoders.Hex.EncodeData(NBitcoin.Crypto.Hashes.SHA256(Encoders.Hex.DecodeData(preimage))) != paid.PaymentHash)
+                preimage = null;
+            if (!string.IsNullOrEmpty(paid.Bolt12))
+                payerNote = await offers.GetPayerNote(paid.Bolt12, cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logs.PayServer.LogInformation("{CryptoCode} (BOLT 12): no proof or note for invoice {InvoiceId}: {Message}",
+                _network.CryptoCode, invoiceId, ex.Message);
+        }
+        // Before the payment, so the "payment received" event (emails, webhooks) can show it.
+        if (payerNote is not null)
+            await _invoiceRepository.UpdateInvoiceMetadata(invoiceId, "payerNote", payerNote);
+        invoiceEntity = await _invoiceRepository.GetInvoice(invoiceId);
+        if (invoiceEntity is null)
+            return;
         var paymentData = new PaymentData()
         {
             Id = paid.PaymentHash,
@@ -469,7 +530,10 @@ public class Bolt12Listener : BackgroundService
             Currency = _network.CryptoCode,
             InvoiceDataId = invoiceId,
             Amount = LightMoney.MilliSatoshis((long)paid.AmountPaidMsat).ToDecimal(LightMoneyUnit.BTC),
-        }.Set(invoiceEntity, handler, new LightningLikePaymentData { PaymentHash = paymentHash });
+        }.Set(invoiceEntity, handler, new Bolt12PaymentDetails
+        {
+            PaymentHash = paid.PaymentHash, Preimage = preimage, Invoice = paid.Bolt12, PayerNote = payerNote
+        });
 
         var payment = await _paymentService.AddPayment(paymentData, [paid.PaymentHash]);
         if (payment is null)
